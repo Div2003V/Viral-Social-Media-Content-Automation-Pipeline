@@ -1,0 +1,509 @@
+{
+  "system": "Viral Social Media Content Automation Pipeline",
+  "version": "1.0.0",
+  "description": "End-to-end automated pipeline: viral topic discovery → AI content generation → platform packaging → peak-hour publishing → engagement monitoring → monetisation tracking → feedback loop. One video per day across Facebook, YouTube, and Instagram.",
+  "owner": "Revinotech",
+
+  "pipeline": {
+
+    "stage_1_discovery": {
+      "label": "Viral Topic Discovery",
+      "trigger": "n8n Cron — daily at 06:00 IST",
+      "sources": [
+        {
+          "id": "google_trends",
+          "tool": "Google Trends RSS + SerpAPI",
+          "endpoint": "https://trends.google.com/trends/trendingsearches/daily/rss?geo=IN",
+          "pull_top_n": 20,
+          "metric": "search_volume_spike"
+        },
+        {
+          "id": "reddit_api",
+          "tool": "Reddit API v2",
+          "subreddits": ["r/worldnews", "r/technology", "r/india", "r/mildlyinteresting"],
+          "sort": "hot",
+          "min_upvotes": 5000,
+          "pull_top_n": 10
+        },
+        {
+          "id": "twitter_x_api",
+          "tool": "X API v2 Trending",
+          "country_code": "IN",
+          "min_tweet_volume": 10000,
+          "pull_top_n": 10
+        },
+        {
+          "id": "youtube_trending",
+          "tool": "YouTube Data API v3",
+          "endpoint": "videos?chart=mostPopular&regionCode=IN&videoCategoryId=0",
+          "metric": "view_velocity_24h",
+          "pull_top_n": 10
+        },
+        {
+          "id": "tiktok_creative_center",
+          "tool": "TikTok Research API",
+          "metrics": ["trending_sounds", "top_hashtags", "hook_patterns"],
+          "region": "IN",
+          "pull_top_n": 5
+        }
+      ],
+      "aggregator": {
+        "model": "gpt-4o",
+        "task": "viral_score_ranking",
+        "system_prompt": "You are a viral content strategist. Given a list of trending topics, score each from 1–100 on two axes: (A) shock_value — how surprising, emotional, or jaw-dropping it is; (B) monetisability — how well it aligns with ad-friendly niches (tech, lifestyle, finance, health, self-improvement). Return a ranked JSON array. Exclude politically divisive, harmful, or YMYL-sensitive topics.",
+        "output_schema": {
+          "topics": [
+            {
+              "rank": 1,
+              "topic": "string",
+              "shock_score": "int 1-100",
+              "monetise_score": "int 1-100",
+              "combined_score": "int (shock * 0.5 + monetise * 0.5)",
+              "niche": "string",
+              "source": "string"
+            }
+          ]
+        },
+        "select_top": 1,
+        "fallback": "If no topic scores above 60 combined, retry discovery with extended subreddit list"
+      }
+    },
+
+    "stage_2_ai_generation": {
+      "label": "AI Script + Video Generation",
+      "inputs": ["stage_1_discovery.selected_topic"],
+
+      "script_generator": {
+        "model": "gpt-4o",
+        "system_prompt": "You are a viral short-form video scriptwriter. Write a 60-90 second video script for the given topic. Structure: (1) HOOK — first 3 seconds, must be a shocking or curiosity-gap statement, no intro; (2) BODY — 3 punchy facts or narrative beats, each under 15 seconds; (3) CTA — final 5 seconds, drive comment + follow. Output JSON only.",
+        "output_schema": {
+          "hook": "string — max 15 words",
+          "body_beats": ["string", "string", "string"],
+          "cta": "string — max 20 words",
+          "tone": "string (e.g. alarming / inspirational / comedic / informative)",
+          "keywords": ["string"],
+          "suggested_visuals": ["string"],
+          "duration_estimate_seconds": "int"
+        },
+        "guardrails": {
+          "banned_topics": ["self-harm", "explicit violence", "political propaganda", "medical misinformation"],
+          "brand_safe": true,
+          "age_gate": false
+        }
+      },
+
+      "video_generation": {
+        "primary_tool": "HeyGen",
+        "config": {
+          "avatar_id": "auto — select most-viewed niche-matched avatar",
+          "voice": "elevenlabs_multilingual_v2",
+          "background": "dynamic — Runway ML generated B-roll",
+          "captions": {
+            "enabled": true,
+            "style": "bold_pop",
+            "keyword_highlight": true
+          },
+          "aspect_ratios_produced": ["9:16", "16:9"],
+          "max_duration_seconds": 90
+        }
+      },
+
+      "audio": {
+        "tool": "ElevenLabs",
+        "model": "eleven_multilingual_v2",
+        "voice_style": "match script tone field",
+        "background_music": {
+          "tool": "Epidemic Sound API",
+          "genre": "auto-match niche",
+          "volume_duck_under_voice": true
+        }
+      },
+
+      "broll": {
+        "tool": "Runway ML Gen-3 Alpha",
+        "scenes": "derived from script.suggested_visuals",
+        "style": "cinematic-realism",
+        "clips_per_beat": 2
+      },
+
+      "assembly": {
+        "tool": "FFmpeg via n8n Exec node",
+        "steps": [
+          "merge avatar track + broll via chroma-key or side-by-side",
+          "overlay captions (burned-in, SRT format)",
+          "mix ElevenLabs VO + music track",
+          "export: H.264 1080p 9:16 for FB/IG, H.264 1080p 16:9 for YT",
+          "auto-generate thumbnail (Midjourney API or Canva API)"
+        ]
+      }
+    },
+
+    "stage_3_platform_packaging": {
+      "label": "Platform-Specific Metadata Generation",
+      "inputs": ["stage_2_ai_generation.script", "stage_2_ai_generation.final_videos"],
+
+      "facebook": {
+        "format": "Reel",
+        "aspect_ratio": "9:16",
+        "max_duration_seconds": 90,
+        "file": "video_9x16.mp4",
+        "metadata_generator": {
+          "model": "gpt-4o",
+          "task": "Generate a Facebook Reel title (max 40 chars), description (max 2200 chars with emojis, newlines, 5 relevant hashtags), and a call-to-action comment to pin.",
+          "output": {
+            "title": "string",
+            "description": "string",
+            "hashtags": ["string x5"],
+            "pinned_comment": "string",
+            "location_tag": "optional"
+          }
+        }
+      },
+
+      "youtube": {
+        "formats": ["Short (9:16, ≤60s)", "Long-form (16:9, ≤90s)"],
+        "upload_both": false,
+        "primary_format": "Short",
+        "metadata_generator": {
+          "model": "gpt-4o",
+          "task": "Generate YouTube SEO-optimised title (max 100 chars, include primary keyword near front), description (max 5000 chars with timestamps, keyword clusters, links), 15 tags, and a chapter list if >60s.",
+          "output": {
+            "title": "string",
+            "description": "string",
+            "tags": ["string x15"],
+            "category": "string",
+            "chapters": [{"time": "0:00", "label": "string"}],
+            "end_screen": true,
+            "cards": ["string"]
+          }
+        }
+      },
+
+      "instagram": {
+        "format": "Reel",
+        "aspect_ratio": "9:16",
+        "max_duration_seconds": 90,
+        "cover_frame_second": 3,
+        "file": "video_9x16.mp4",
+        "metadata_generator": {
+          "model": "gpt-4o",
+          "task": "Generate an Instagram Reel caption (max 2200 chars, strong hook in first line, 30 hashtags mix of broad/niche, CTA to save/share) and alt-text for accessibility.",
+          "output": {
+            "caption": "string",
+            "hashtags": ["string x30"],
+            "alt_text": "string",
+            "collaborator_tag": "optional",
+            "location": "optional"
+          }
+        }
+      }
+    },
+
+    "stage_4_scheduling": {
+      "label": "Peak-Hour Scheduler",
+      "tool": "n8n Cron + Wait node",
+      "strategy": "One video per day, staggered across platforms to maximise feed presence",
+
+      "peak_windows": {
+        "facebook": {
+          "days": ["Monday", "Wednesday", "Friday", "Saturday"],
+          "windows_IST": ["12:00–13:00", "13:00–15:00", "20:00–21:00"],
+          "post_at": "best window determined by prior 4-week engagement data from Analytics stage"
+        },
+        "youtube": {
+          "days": ["Tuesday", "Thursday", "Saturday", "Sunday"],
+          "windows_IST": ["14:00–16:00", "20:00–23:00"],
+          "post_at": "window with highest historical CTR in PostgreSQL store"
+        },
+        "instagram": {
+          "days": ["Monday", "Tuesday", "Thursday", "Friday"],
+          "windows_IST": ["06:00–09:00", "11:00–13:00", "18:00–21:00"],
+          "post_at": "window with highest save-rate in PostgreSQL store"
+        }
+      },
+
+      "dynamic_adjustment": {
+        "enabled": true,
+        "method": "Weekly n8n workflow queries PostgreSQL for top-performing hour per platform, overwrites cron expression",
+        "min_data_points_required": 7
+      }
+    },
+
+    "stage_5_publishing": {
+      "label": "Automated Publishing",
+
+      "facebook": {
+        "api": "Facebook Graph API v20.0",
+        "endpoint": "/me/videos",
+        "method": "POST",
+        "auth": "Page Access Token (long-lived)",
+        "payload": {
+          "file_url": "stage_2.video_9x16_url",
+          "title": "stage_3.facebook.title",
+          "description": "stage_3.facebook.description",
+          "published": true,
+          "scheduled_publish_time": "stage_4.facebook.post_at_unix"
+        },
+        "post_publish": {
+          "pin_comment": true,
+          "comment_text": "stage_3.facebook.pinned_comment"
+        }
+      },
+
+      "youtube": {
+        "api": "YouTube Data API v3",
+        "endpoint": "/upload/youtube/v3/videos",
+        "method": "POST multipart",
+        "auth": "OAuth 2.0 service account",
+        "payload": {
+          "snippet": {
+            "title": "stage_3.youtube.title",
+            "description": "stage_3.youtube.description",
+            "tags": "stage_3.youtube.tags",
+            "categoryId": "stage_3.youtube.category"
+          },
+          "status": {
+            "privacyStatus": "public",
+            "publishAt": "stage_4.youtube.post_at_iso8601",
+            "madeForKids": false
+          }
+        },
+        "post_publish": {
+          "add_end_screen": "stage_3.youtube.end_screen",
+          "add_card": "stage_3.youtube.cards"
+        }
+      },
+
+      "instagram": {
+        "api": "Instagram Content Publishing API",
+        "steps": [
+          "POST /me/media — upload video as container, include caption, cover_url",
+          "Poll container status until FINISHED",
+          "POST /me/media_publish — publish container_id"
+        ],
+        "auth": "Instagram Graph API User Token",
+        "schedule_via": "scheduled_publish_time field on media object",
+        "post_publish": {
+          "update_bio_link": "if digital product CTA in caption, update Linktree via Linktree API"
+        }
+      },
+
+      "confirmation": {
+        "log_to": "PostgreSQL table: posts (platform, post_id, published_at, topic, video_url)",
+        "notify": "Slack webhook — #content-ops channel",
+        "alert_on_failure": "PagerDuty or email fallback"
+      }
+    },
+
+    "stage_6_engagement_monitoring": {
+      "label": "Comment & Engagement Monitoring",
+      "tool": "n8n Polling Workflow",
+      "frequency": "every 30 minutes for first 48h, then every 6h",
+
+      "metrics_collected": {
+        "facebook": ["views", "reach", "reactions", "comments", "shares", "saves", "watch_time_avg_pct"],
+        "youtube": ["views", "watch_time_hours", "avg_view_duration", "CTR", "likes", "comments", "subscribers_gained"],
+        "instagram": ["plays", "reach", "likes", "comments", "saves", "shares", "follows", "profile_visits"]
+      },
+
+      "comment_management": {
+        "auto_reply": {
+          "enabled": true,
+          "model": "gpt-4o",
+          "system_prompt": "You are a friendly, engaging social media community manager for [Brand]. Reply to the comment below in 1–2 sentences in the same language as the commenter. Be warm, specific, and encourage further discussion. Never be promotional. JSON only: {reply: string}",
+          "trigger": "comments with ≥5 likes OR direct questions",
+          "max_replies_per_day": 50,
+          "reply_within_hours": 2
+        },
+        "sentiment_classification": {
+          "model": "gpt-4o",
+          "labels": ["positive", "neutral", "constructive_criticism", "question", "toxic"],
+          "action_map": {
+            "positive": "like + optional reply",
+            "neutral": "log only",
+            "constructive_criticism": "reply + flag for human review",
+            "question": "auto_reply",
+            "toxic": "hide + report via API + log"
+          }
+        },
+        "demand_signals": {
+          "enabled": true,
+          "model": "gpt-4o",
+          "task": "Extract recurring audience requests, questions, and topic suggestions from top comments. Output JSON array of {theme, frequency, example_comment}.",
+          "feed_to": "stage_1_discovery.aggregator as priority_topic_hints"
+        }
+      },
+
+      "performance_store": {
+        "db": "PostgreSQL",
+        "tables": {
+          "post_metrics": "post_id, platform, timestamp, views, likes, comments, shares, watch_time, ctr",
+          "comment_log": "comment_id, post_id, platform, text, sentiment, replied_at, reply_text",
+          "demand_signals": "theme, frequency, first_seen, source_post_id"
+        }
+      }
+    },
+
+    "stage_7_monetisation": {
+      "label": "Monetisation Tracking & Optimisation",
+
+      "eligibility_monitor": {
+        "facebook": {
+          "program": "Facebook In-Stream Ads + Reels Bonus",
+          "thresholds": {
+            "followers": 10000,
+            "minutes_viewed_60d": 600000
+          },
+          "check_frequency": "weekly"
+        },
+        "youtube": {
+          "program": "YouTube Partner Program",
+          "thresholds": {
+            "subscribers": 1000,
+            "watch_hours_12m": 4000,
+            "shorts_views_90d": 10000000
+          },
+          "check_frequency": "weekly"
+        },
+        "instagram": {
+          "program": "Instagram Reels Bonus (invite-only) + Subscriptions",
+          "thresholds": {
+            "followers": 10000,
+            "professional_account": true
+          },
+          "check_frequency": "weekly"
+        }
+      },
+
+      "revenue_streams": [
+        {
+          "type": "ad_revenue",
+          "sources": ["YouTube AdSense RPM", "Facebook Stars", "Facebook In-Stream Ads"],
+          "track_via": "platform native analytics APIs",
+          "kpi": "RPM (revenue per 1000 views)"
+        },
+        {
+          "type": "brand_deals",
+          "detection": {
+            "model": "gpt-4o",
+            "task": "Given current niche and top-performing topics, identify 5 brands that would be a natural sponsorship fit. Output JSON: [{brand, niche_match_score, pitch_angle}]."
+          },
+          "outreach": "Draft personalised email via gpt-4o, send via Gmail API",
+          "rate_card": "auto-generate based on avg views × CPM benchmark"
+        },
+        {
+          "type": "affiliate_marketing",
+          "platforms": ["Amazon Associates", "Impact.com", "Gumroad affiliate"],
+          "link_injection": "Insert affiliate link into YouTube description position 2 and Instagram bio link",
+          "tracking": "UTM parameters per platform per post"
+        },
+        {
+          "type": "digital_products",
+          "products": ["Notion templates", "eBooks", "Mini-courses"],
+          "host": "Gumroad",
+          "cta_injection": "Add product CTA in final 5s of script if niche matches product",
+          "link_management": "Linktree API — update top link weekly to best-converting product"
+        }
+      ],
+
+      "monetisation_dashboard": {
+        "data_sources": ["AdSense API", "Facebook Analytics API", "Gumroad API", "affiliate UTM tracking in PostgreSQL"],
+        "kpis": ["total_revenue_monthly", "RPM_per_platform", "best_monetising_niche", "affiliate_conversion_rate"],
+        "report": "Weekly Slack digest with top 3 revenue actions"
+      }
+    },
+
+    "stage_8_feedback_loop": {
+      "label": "AI Strategy Update & Loop",
+      "trigger": "n8n Cron — every Sunday 08:00 IST",
+
+      "analytics_aggregation": {
+        "query": "PostgreSQL — last 7 days post_metrics + comment_log + demand_signals",
+        "outputs": [
+          "top_5_topics_by_views",
+          "top_5_hooks_by_watch_time",
+          "worst_5_topics_by_drop_off",
+          "highest_RPM_niches",
+          "top_audience_demand_themes"
+        ]
+      },
+
+      "strategy_updater": {
+        "model": "gpt-4o",
+        "system_prompt": "You are a data-driven content strategist. Given last week's performance data, update the content brief for the coming week. Adjust: (1) topic priority weights; (2) hook formula if avg watch-time < 40%; (3) platform peak-hour windows if CTR improved at off-peak times; (4) niche focus based on RPM data. Output JSON only.",
+        "output": {
+          "updated_topic_weights": {},
+          "updated_hook_formula": "string",
+          "updated_peak_windows": {},
+          "niche_focus_next_week": "string",
+          "notes": "string"
+        },
+        "writes_to": "n8n config variables + PostgreSQL strategy_log table"
+      },
+
+      "human_review": {
+        "enabled": true,
+        "digest_via": "Slack — #strategy-review channel",
+        "approve_or_override": "Manual Slack button triggers n8n webhook to confirm/modify AI strategy",
+        "default_if_no_response": "auto-approve after 4 hours"
+      }
+    }
+  },
+
+  "infrastructure": {
+    "orchestration": "n8n (self-hosted on VPS or n8n Cloud)",
+    "database": "PostgreSQL 15",
+    "file_storage": "AWS S3 or Cloudflare R2 (video + thumbnail assets)",
+    "secret_management": "n8n Credentials store (AES-256 encrypted)",
+    "notifications": "Slack webhooks",
+    "error_handling": "n8n Error Trigger node → Slack alert + retry up to 3x",
+    "cost_estimate_monthly_usd": {
+      "n8n_cloud": 50,
+      "heygen": 89,
+      "elevenlabs": 22,
+      "runway_ml": 95,
+      "openai_gpt4o": "~40 (usage-based)",
+      "epidemic_sound": 15,
+      "postgres_hosting": 20,
+      "s3_storage": 10,
+      "total_approx": 341
+    }
+  },
+
+  "api_keys_required": [
+    "OPENAI_API_KEY",
+    "HEYGEN_API_KEY",
+    "ELEVENLABS_API_KEY",
+    "RUNWAY_API_KEY",
+    "FACEBOOK_PAGE_ACCESS_TOKEN",
+    "YOUTUBE_OAUTH2_CLIENT_ID",
+    "YOUTUBE_OAUTH2_CLIENT_SECRET",
+    "INSTAGRAM_GRAPH_API_TOKEN",
+    "REDDIT_CLIENT_ID",
+    "REDDIT_CLIENT_SECRET",
+    "TWITTER_BEARER_TOKEN",
+    "SERPAPI_KEY",
+    "EPIDEMIC_SOUND_API_KEY",
+    "GUMROAD_API_KEY",
+    "LINKTREE_API_KEY",
+    "SLACK_WEBHOOK_URL",
+    "AWS_S3_KEY",
+    "AWS_S3_SECRET"
+  ],
+
+  "compliance_notes": {
+    "content_policy": "All scripts pass GPT-4o brand-safety guardrail before video generation",
+    "copyright": "Only royalty-free or licensed music via Epidemic Sound API",
+    "data_privacy": "No PII stored in comment logs — comment text hashed after sentiment scoring",
+    "platform_tos": {
+      "youtube": "Respect YPP advertiser-friendly content guidelines",
+      "facebook": "Comply with Meta Content Monetisation Policies",
+      "instagram": "Comply with IG Branded Content and Reels monetisation rules"
+    },
+    "rate_limits": {
+      "facebook_graph_api": "200 calls/hour per token",
+      "youtube_data_api": "10000 units/day",
+      "instagram_graph_api": "200 calls/hour"
+    }
+  }
+}
