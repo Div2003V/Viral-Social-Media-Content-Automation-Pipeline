@@ -1,5 +1,7 @@
 # Viral-Social-Media-Content-Automation-Pipeline
 
+Just import the JSON file to your N8N flow, and proceed to enter all the API keys and other keys, link your accounts, add instances of your credentials, etc and you're done.
+
 Stage 1 — Discovery: Five live data feeds (Google Trends, Reddit, X, YouTube Trending, TikTok Creative Center) all funnel into a GPT-4o Viral Score Engine that ranks topics on a shock × monetisability matrix and picks the day's winner.
 Stage 2 — AI Generation: GPT-4o writes the script (hook under 3 seconds, 3 body beats, CTA). HeyGen generates the avatar video, Runway ML produces cinematic B-roll, ElevenLabs handles voiceover, and Epidemic Sound auto-selects royalty-free music. FFmpeg assembles the final 9:16 and 16:9 files.
 Stage 3 — Platform Packaging: GPT-4o writes completely different metadata for each platform — Facebook gets 2200-char descriptions with 5 hashtags, YouTube gets SEO-engineered titles + 5000-char keyword-rich descriptions + 15 tags, Instagram gets a first-line hook caption + 30 hashtags + alt-text.
